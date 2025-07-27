@@ -80,3 +80,40 @@ if uploaded_file:
 
 else:
     st.info("👈 Please upload a valid Excel file (.xlsx) to begin.")
+    # --- FCL CALCULATION ---
+st.subheader("🧮 Suggested Free Cover Limit (FCL)")
+
+# Mock FCL factor table (replace with actual table later)
+def get_fcl_factor(size):
+    if size <= 50:
+        return 1
+    elif size <= 100:
+        return 1.5
+    elif size <= 250:
+        return 2
+    elif size <= 500:
+        return 3
+    else:
+        return 4
+
+fcl_factor = get_fcl_factor(len(df))
+base_fcl = round(fcl_factor * df['sum_assured'].mean(), 2)
+
+# Age reduction rule
+avg_age = round(df['age'].mean(), 2)
+weighted_age = round(weighted_age, 2)
+age_flag = avg_age > 45 or weighted_age > 45
+
+final_fcl = round(base_fcl * 0.75, 2) if age_flag else base_fcl
+
+st.markdown(f"""
+- 📌 **Group Size**: {len(df)} members  
+- 📌 **Average SA**: ${round(df['sum_assured'].mean(), 2):,}  
+- 📌 **FCL Factor**: {fcl_factor}  
+- 📌 **Base FCL**: ${base_fcl:,.2f}  
+- 📌 **Avg Age**: {avg_age}, Weighted Age: {weighted_age}  
+- ⚠️ {"One or both ages > 45 → Reduction applied (25%)" if age_flag else "Both ages ≤ 45 → No reduction"}  
+""")
+
+st.success(f"✅ **Suggested FCL: ${final_fcl:,.2f}**")
+
