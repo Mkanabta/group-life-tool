@@ -219,3 +219,34 @@ if repat_enabled:
 st.markdown("### 📋 Selected Benefits Summary")
 for k, v in selected_benefits.items():
     st.write(f"🔹 {k}: {'$'+str(v) if k in ['MedEx', 'Repatriation'] else str(v)+'% of DAC'}")
+
+# --- MAXIMUM EXPOSURE CALCULATION ---
+st.subheader("💥 Maximum Exposure per Benefit")
+
+exposure_data = []
+max_sa = df["sum_assured"].max()
+
+for benefit, value in selected_benefits.items():
+    if benefit == "DAC":
+        exposure_data.append({
+            "Benefit": benefit,
+            "Basis": "100% of DAC",
+            "Max Exposure (USD)": round(max_sa, 2)
+        })
+    elif benefit in ["MedEx", "Repatriation"]:
+        exposure_data.append({
+            "Benefit": benefit,
+            "Basis": f"Flat Limit (${value:,})",
+            "Max Exposure (USD)": round(value, 2)
+        })
+    else:
+        exposure = round((value / 100) * max_sa, 2)
+        exposure_data.append({
+            "Benefit": benefit,
+            "Basis": f"{value}% of DAC",
+            "Max Exposure (USD)": exposure
+        })
+
+exposure_df = pd.DataFrame(exposure_data)
+st.dataframe(exposure_df, use_container_width=True)
+
