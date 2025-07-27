@@ -250,3 +250,79 @@ if 'df' in locals() and not df.empty:
 
     exposure_df = pd.DataFrame(exposure_data)
     st.dataframe(exposure_df, use_container_width=True)
+
+# --- RATE SUGGESTION MODULE ---
+st.subheader("📉 Suggested Rate per Mille")
+
+# 1. Industry Rating Map
+industry_risk_factors = {
+    "Banking": 1.0,
+    "Education": 1.1,
+    "Construction": 1.5,
+    "Oil & Gas": 1.7,
+    "Healthcare": 1.3,
+    "Agriculture": 1.4,
+    "Government": 1.0,
+    "Retail": 1.2,
+    "IT": 1.0,
+    "Other": 1.2
+}
+
+industry = st.selectbox("Industry of Group", list(industry_risk_factors.keys()))
+industry_factor = industry_risk_factors[industry]
+
+# 2. Base DAC Rate Logic (you'll replace this logic later with actual table)
+base_dac_rate = 1.8  # start at 1.8‰
+age_load = 0.0
+credibility_load = 0.0
+
+# Age adjustment
+if avg_age > 45:
+    age_load = 0.3
+elif avg_age > 40:
+    age_load = 0.2
+elif avg_age > 35:
+    age_load = 0.1
+
+# Credibility adjustment
+if final_credibility < 5:
+    credibility_load = 0.5
+elif final_credibility < 10:
+    credibility_load = 0.3
+elif final_credibility < 15:
+    credibility_load = 0.1
+
+# 3. Optional Benefit Loadings
+benefit_loads = {
+    "Accidental Death (AccDeath)": 0.2,
+    "PTD – Accident": 0.4,
+    "PTD – Sickness": 0.4,
+    "PPD – Acc/Sick": 0.3,
+    "TTD – Acc/Sick": 0.3,
+    "MedEx": 0.2,
+    "Repatriation": 0.1
+}
+
+optional_load = 0.0
+for benefit in selected_benefits:
+    if benefit != "DAC" and benefit in benefit_loads:
+        optional_load += benefit_loads[benefit]
+
+# Final Rate Calculation
+suggested_dac_rate = round((base_dac_rate + age_load + credibility_load) * industry_factor, 2)
+total_scheme_rate = round(suggested_dac_rate + optional_load, 2)
+
+# Display
+st.markdown(f"""
+- 📌 **Base DAC Rate**: {base_dac_rate}‰  
+- 📌 **Industry Factor**: {industry_factor} ({industry})  
+- 📌 **Age Load**: {age_load}‰ (Avg Age: {avg_age})  
+- 📌 **Credibility Load**: {credibility_load}‰ (Credibility: {final_credibility}%)  
+- ➕ **Optional Benefit Load**: {optional_load}‰  
+""")
+
+st.success(f"✅ **Suggested DAC Rate**: {suggested_dac_rate}‰")
+st.success(f"✅ **Estimated Total Scheme Rate**: {total_scheme_rate}‰")
+
+# You may later save this or compare it to actual reinsurer quotes.
+
