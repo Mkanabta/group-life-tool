@@ -119,6 +119,8 @@ if uploaded_file:
         return premiums
 
     results = []
+
+try:
     for i, row in df.iterrows():
         sa = row["sa"]
         if sa_basis == "Flat SA":
@@ -135,12 +137,16 @@ if uploaded_file:
         })
 
     result_df = pd.DataFrame(results)
+    st.write("### Member Level Premiums")
     st.dataframe(result_df)
 
-st.write("### Total Premium Summary")
-premium_cols = [col for col in ["DAC", "PTD"] if col in result_df.columns]
-if premium_cols:
-    st.write(result_df[premium_cols].sum(numeric_only=True))
-else:
-    st.write("No premium calculated. Please select benefits.")
+    st.write("### Total Premium Summary")
+    premium_cols = [col for col in ["DAC", "PTD"] if col in result_df.columns]
+    if premium_cols:
+        st.write(result_df[premium_cols].sum(numeric_only=True))
+    else:
+        st.write("No premium calculated. Please select benefits.")
 
+except Exception as e:
+    st.error("Something went wrong. Please check that DOB and salary/SA are correctly provided.")
+    st.exception(e)
