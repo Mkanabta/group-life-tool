@@ -137,5 +137,10 @@ if uploaded_file:
     result_df = pd.DataFrame(results)
     st.dataframe(result_df)
 
-    st.write("### Total Premium Summary")
-    st.write(result_df[["DAC", "PTD"]].sum(numeric_only=True))
+st.write("### Total Premium Summary")
+premium_cols = [col for col in ["DAC", "PTD"] if col in result_df.columns]
+if premium_cols:
+    st.write(result_df[premium_cols].sum(numeric_only=True))
+else:
+    st.write("No premium calculated. Please select benefits.")
+
