@@ -1,26 +1,26 @@
 import streamlit as st
 import pandas as pd
+import numpy as np
 from datetime import datetime
 import datetime
-import numpy as np
 
-st.set_page_config(page_title="Group Life Tool", layout="wide")
-
+st.set_page_config(page_title="Group Life Reinsurance Tool", layout="wide")
 st.title("Group Life Reinsurance Analysis Tool")
 
-# Input: Scheme info
+# --- Input: Scheme Details ---
 scheme_name = st.text_input("Scheme Name")
 country = st.selectbox("Country of Risk", ["Jordan", "Palestine", "Kuwait", "UAE", "Other"])
 sa_basis = st.radio("Sum Assured Basis", ["Flat SA", "Multiple of Salary"])
+
 if sa_basis == "Flat SA":
     flat_sa = st.number_input("Flat Sum Assured", min_value=0)
 else:
     multiple = st.number_input("Salary Multiple", min_value=1, max_value=60, value=24)
 
-# Input: Uploaded Census
+# --- Upload Census File ---
 uploaded_file = st.file_uploader("Upload Census Excel File", type=["xlsx"])
 
-# Input: Requested Benefits
+# --- Benefits Selection ---
 st.subheader("Benefits Selection")
 st.markdown("DAC is mandatory. Select additional benefits:")
 
@@ -44,23 +44,33 @@ for benefit, default in optional_benefits.items():
             pct = st.number_input(f"{benefit} (% of DAC)", min_value=0, max_value=default, value=default)
             requested_benefits[benefit] = pct
 
-# Input: Claims History
+# --- Claims Entry ---
 st.subheader("Claims Experience")
-claims_provided = st.radio("Claims Data Provided?", ["Yes", "No"])
-if claims_provided == "Yes":
-    years_of_claims = st.selectbox("Years of Claims Data", [1, 2, 3, 4, 5])
-    number_of_lives = st.number_input("Number of Members", min_value=0)
-    if number_of_lives < 500:
-        credibility = [2, 3, 5, 7, 10][years_of_claims - 1]
-    else:
-        credibility = min(50, 2 * years_of_claims)
+claims_data = []
+
+add_claims = st.checkbox("Add Past Claims")
+if add_claims:
+    st.markdown("#### Enter Claims Manually")
+    num_claims = st.number_input("How many claims to enter?", min_value=1, max_value=50, value=1)
+
+    for i in range(num_claims):
+        st.markdown(f"**Claim #{i + 1}**")
+        col1, col2, col3 = st.columns(3)
+        with col1:
+            uwy = st.text_input(f"UWY (Underwriting Year) - Claim #{i + 1}", key=f"uwy_{i}")
+        with col2:
+            amount = st.number_input(f"Claim Amount Paid - Claim #{i + 1}", min_value=0, key=f"amt_{i}")
+        with col3:
+            benefit = st.selectbox(
+                f"Benefit Type - Claim #{i + 1}",
+                ["Death", "TPD", "WC", "MedEx", "TTD"],
+                key=f"ben_{i}"
+            )
+        claims_data.append({"UWY": uwy, "Amount": amount, "Benefit": benefit})
 else:
-    scheme_type = st.radio("Scheme Status", ["Virgin Scheme", "Clean Claims Record"])
-    credibility = 0
+    scheme_type = st.radio("Scheme Type", ["Virgin Scheme", "Clean Claims Record"])
 
-st.write(f"**Credibility Assigned:** {credibility}%")
-
-# --- Rates (sample) ---
+# --- Rates & Mappings (Samples or Placeholders) ---
 dac_rates_male = {age: rate for age, rate in zip(range(18, 70), [0.41]*52)}
 dac_rates_female = {age: rate for age, rate in zip(range(18, 70), [0.38]*52)}
 ptd_rates = {age: rate for age, rate in zip(range(18, 65), [0.041]*47)}
@@ -99,7 +109,6 @@ def calculate_member_premium(row):
         occ_class = get_class(row.get("job_title", "admin"))
         loading = occupation_load.get(occ_class, 0.4)
 
-        # Get SA
         if sa_basis == "Flat SA":
             sa = flat_sa
         else:
@@ -127,9 +136,7 @@ def calculate_member_premium(row):
     except Exception as e:
         return {"Error": str(e)}
 
-# ----------------------
-# Run if file uploaded
-# ----------------------
+# --- Main Execution ---
 if uploaded_file:
     try:
         df = pd.read_excel(uploaded_file)
@@ -147,13 +154,68 @@ if uploaded_file:
             if "id" not in df.columns:
                 df["id"] = df.index + 1
 
+            df["age"] = df["dob"].apply(nearest_age)
+            df["sa"] = df["salary"] * multiple if sa_basis != "Flat SA" else flat_sa
+
+            def weighted_age(df):
+                df["weight"] = df["sa"]
+                return round(np.average(df["age"], weights=df["weight"]), 1)
+
+            avg_age = df["age"].mean()
+            w_age = weighted_age(df)
+
+            def get_fcl_factor(group_size):
+                if group_size <= 5:
+                    return 0.5
+                elif group_size <= 25:
+                    return 1
+                elif group_size <= 100:
+                    return 2
+                elif group_size <= 300:
+                    return 3
+                else:
+                    return 4
+
+            fcl = get_fcl_factor(len(df)) * df["sa"].mean()
+            adjusted_fcl = round(fcl * 0.75, 2) if avg_age > 45 or w_age > 45 else round(fcl, 2)
+            st.markdown(f"### Free Cover Limit (FCL): **USD {adjusted_fcl:,.2f}**")
+
             result = pd.DataFrame([calculate_member_premium(r) for _, r in df.iterrows()])
             st.subheader("Premium Results")
             st.dataframe(result)
 
+            # --- Rate per Mille ---
+            if "DAC" in result.columns:
+                total_dac = result["DAC"].sum()
+                total_sa = result["SA"].sum()
+                if total_sa > 0:
+                    suggested_rate_per_mille = round((total_dac / total_sa) * 1000, 3)
+                    st.markdown(f"**Suggested DAC Rate per Mille:** {suggested_rate_per_mille}")
+
+            # --- Total Premiums ---
             premium_cols = [col for col in result.columns if col not in ['Member ID', 'Age', 'Gender', 'Occupation', 'SA']]
-            st.write("### Total Premium Summary")
-            st.write(result[premium_cols].sum())
+            if premium_cols:
+                st.write("### Total Premium Summary")
+                st.write(result[premium_cols].sum())
+
+            # --- Credibility from Claims ---
+            def calculate_credibility(lives, years_of_claims):
+                if lives < 500:
+                    table = {1: 2, 2: 3, 3: 5, 4: 7, 5: 10}
+                else:
+                    table = {1: 10, 2: 15, 3: 20, 4: 25, 5: 30}
+                return table.get(years_of_claims, 0)
+
+            if add_claims:
+                try:
+                    years = len(set([c["UWY"] for c in claims_data if c["UWY"]]))
+                    credibility = calculate_credibility(len(df), years)
+                    st.success(f"Claims data spans {years} year(s). Assigned Credibility: {credibility}%")
+                except:
+                    st.warning("Could not determine credibility from entered claims.")
+            else:
+                credibility = 0 if scheme_type == "Virgin Scheme" else 5
+                st.info(f"Assigned Credibility: {credibility}%")
 
     except Exception as e:
         st.error("Error processing file.")
