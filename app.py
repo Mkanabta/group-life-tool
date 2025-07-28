@@ -1,331 +1,141 @@
 import streamlit as st
 import pandas as pd
 from datetime import datetime
-import datetime  # needed for .date.today()
+import datetime
 import numpy as np
 
+# ---------------------------------
+# UI SETUP
+# ---------------------------------
 
-st.set_page_config(page_title="Group Life Reinsurance Tool", layout="wide")
-st.title("📊 Group Life Reinsurance Analysis Tool")
+st.title("Group Life Reinsurance Analysis Tool")
 
-# Input fields
-scheme = st.text_input("Scheme Name")
+scheme_name = st.text_input("Scheme Name")
 country = st.selectbox("Country of Risk", ["Jordan", "Palestine", "Kuwait", "UAE", "Other"])
-uploaded_file = st.file_uploader("Upload Census File (Excel)", type=["xlsx"])
 
-# For session-based claim storage
-if "claims" not in st.session_state:
-    st.session_state["claims"] = []
-
+uploaded_file = st.file_uploader("Upload Census File (.xlsx)", type=["xlsx"])
 if uploaded_file:
     df = pd.read_excel(uploaded_file)
-    df.columns = [col.strip().lower().replace(" ", "_") for col in df.columns]
 
-    if 'member_id' not in df.columns:
-        df.insert(0, 'member_id', range(1, len(df) + 1))
+    # Standardize column names
+    df.columns = [col.strip().lower() for col in df.columns]
+    
+    # Rename columns to expected
+    if "sa" not in df.columns and "salary" in df.columns:
+        df["sa"] = None
+    if "gender" not in df.columns:
+        df["gender"] = "male"
+    if "job_title" not in df.columns:
+        df["job_title"] = "Administration Staff"
 
-    if 'dob' not in df.columns:
-        st.error("Missing required column: 'dob'")
-        st.stop()
+    # ---------------------------------
+    # CONFIGURATION INPUTS
+    # ---------------------------------
 
-    df['dob'] = pd.to_datetime(df['dob'], errors='coerce')
-    df['age'] = df['dob'].apply(lambda d: (datetime.today() - d).days // 365 if pd.notnull(d) else None)
-    df = df[df['age'] <= 70]
-
-    # SA Basis selection
-    st.subheader("🧮 Sum Assured Calculation Basis")
-    sa_basis = st.selectbox("Select SA Basis", [
-        "Use SA from file (if available)",
-        "12 × Monthly Salary",
-        "24 × Monthly Salary",
-        "Flat amount (coming soon)"
-    ])
-
-    if 'sa' in df.columns and sa_basis == "Use SA from file (if available)":
-        df['sum_assured'] = df['sa']
-    elif 'salary' in df.columns and ("12 ×" in sa_basis or "24 ×" in sa_basis):
-        multiplier = 12 if "12 ×" in sa_basis else 24
-        df['sum_assured'] = df['salary'] * multiplier
+    sa_basis = st.radio("Sum Assured Basis", ["Flat SA", "Multiple of Salary"])
+    if sa_basis == "Flat SA":
+        flat_sa = st.number_input("Enter Flat SA Amount", min_value=0)
     else:
-        st.error("No valid SA or Salary column found for selected basis.")
-        st.stop()
+        multiple = st.number_input("Enter Salary Multiple", min_value=1, max_value=60, value=24)
 
-    df['weighted_age'] = df['age'] * df['sum_assured']
-    total_sa = df['sum_assured'].sum()
-    total_weighted_age = df['weighted_age'].sum()
-    weighted_age = round(total_weighted_age / total_sa, 2) if total_sa > 0 else 0
-    avg_age = round(df['age'].mean(), 2)
-
-    st.subheader("📈 Scheme Summary")
-    col1, col2, col3 = st.columns(3)
-    col1.metric("Total Members", len(df))
-    col2.metric("Average Age", avg_age)
-    col3.metric("Weighted Age", weighted_age)
-
-    col4, col5 = st.columns(2)
-    col4.metric("Average SA", f"${round(df['sum_assured'].mean(), 2):,}")
-    col5.metric("Total SA", f"${round(df['sum_assured'].sum(), 2):,}")
-
-    # Data quality
-    st.subheader("⚠️ Data Quality Checks")
-    gender_missing = df['gender'].isnull().sum() if 'gender' in df.columns else len(df)
-    occ_missing = df['occupation'].isnull().sum() if 'occupation' in df.columns else len(df)
-
-    st.write(f"🔹 Missing Gender: {gender_missing}")
-    st.write(f"🔹 Missing Occupation: {occ_missing}")
-
-    # Preview
-    st.subheader("👥 Census Preview")
-    st.dataframe(df.head(50), use_container_width=True)
-
-    # FCL
-    st.subheader("🧮 Suggested Free Cover Limit (FCL)")
-    def get_fcl_factor(size):
-        if size <= 50:
-            return 1
-        elif size <= 100:
-            return 1.5
-        elif size <= 250:
-            return 2
-        elif size <= 500:
-            return 3
-        else:
-            return 4
-
-    fcl_factor = get_fcl_factor(len(df))
-    base_fcl = round(fcl_factor * df['sum_assured'].mean(), 2)
-    age_flag = avg_age > 45 or weighted_age > 45
-    final_fcl = round(base_fcl * 0.75, 2) if age_flag else base_fcl
-
-    st.markdown(f"""
-    - 📌 **Group Size**: {len(df)}  
-    - 📌 **FCL Factor**: {fcl_factor}  
-    - 📌 **Base FCL**: ${base_fcl:,.2f}  
-    - 📌 **Age Flag**: {"Yes → 25% reduction" if age_flag else "No reduction"}  
-    """)
-    st.success(f"✅ **Suggested FCL: ${final_fcl:,.2f}**")
-
-    # --- CLAIMS SECTION ---
-    st.subheader("📂 Claims Experience & Credibility")
-
-    claim_option = st.radio("Select claims experience type:", [
-        "Full Claims Data Provided",
-        "Clean Record (No Claims)",
-        "Virgin Scheme (First-Time Cover)"
+    st.write("### Select Benefits")
+    selected_benefits = st.multiselect("Optional Benefits (DAC is mandatory)", [
+        "PTD – Accident", "PTD – Sickness"
     ])
+    selected_benefits.append("DAC")
 
-    claims_df = pd.DataFrame(st.session_state["claims"])
+    # ---------------------------------
+    # RATE TABLES
+    # ---------------------------------
 
-    if claim_option == "Full Claims Data Provided":
-        with st.form("claims_form", clear_on_submit=True):
-            col1, col2, col3 = st.columns(3)
-            year = col1.number_input("Claim UWY", min_value=2000, max_value=datetime.today().year, step=1)
-            amount = col2.number_input("Claim Amount Paid (USD)", min_value=0.0, step=100.0)
-            benefit = col3.selectbox("Benefit Type", ["DAC", "AccDeath", "TPD", "PPD", "TTD", "MedEx", "Repatriation"])
-            submitted = st.form_submit_button("Add Claim")
-            if submitted and amount > 0:
-                st.session_state["claims"].append({
-                    "claim_uwy": year,
-                    "claim_amount": amount,
-                    "benefit_type": benefit
-                })
+    dac_rates = {
+        "male": {age: rate for age, rate in zip(range(18, 70), [
+            0.41, 0.41, 0.41, 0.41, 0.38, 0.38, 0.38, 0.38, 0.37, 0.37, 0.37, 0.37, 0.39, 0.41, 0.45,
+            0.48, 0.52, 0.58, 0.65, 0.72, 0.8, 0.9, 1.02, 1.15, 1.3, 1.47, 1.66, 1.88, 2.12, 2.39, 2.63,
+            3.02, 3.4, 3.82, 4.28, 4.68, 5.24, 5.85, 6.53, 7.28, 8.1, 9, 10.01, 11.11, 12.33, 13.66,
+            15.12, 16.73, 18.5, 20.45
+        ])},
+        "female": {age: rate for age, rate in zip(range(18, 70), [
+            0.41, 0.41, 0.41, 0.41, 0.38, 0.38, 0.38, 0.38, 0.37, 0.37, 0.37, 0.37, 0.37, 0.37, 0.37,
+            0.37, 0.39, 0.41, 0.45, 0.48, 0.52, 0.58, 0.65, 0.72, 0.8, 0.9, 1.02, 1.15, 1.3, 1.47, 1.66,
+            1.88, 2.12, 2.39, 2.63, 3.02, 3.4, 3.82, 4.28, 4.68, 5.24, 5.85, 6.53, 7.28, 8.1, 9, 10.01,
+            11.11, 12.33, 13.66
+        ])}
+    }
 
-        if not claims_df.empty:
-            st.dataframe(claims_df, use_container_width=True)
-            claim_years = claims_df["claim_uwy"].nunique()
-            total_claims_paid = claims_df["claim_amount"].sum()
+    ptd_class1_rates = {age: rate for age, rate in zip(range(18, 65), [
+        0.041, 0.041, 0.041, 0.041, 0.038, 0.038, 0.038, 0.038, 0.037, 0.037, 0.037, 0.037, 0.039, 0.041,
+        0.045, 0.042, 0.052, 0.058, 0.065, 0.072, 0.08, 0.09, 0.102, 0.115, 0.13, 0.147, 0.166, 0.188,
+        0.212, 0.239, 0.263, 0.302, 0.34, 0.382, 0.428, 0.468, 0.524, 0.585, 0.653, 0.728, 0.81, 0.9,
+        1.001, 1.111, 1.233
+    ])}
+
+    occupation_class_map = {
+        "class 1": ["administration", "banking", "clerical", "doctor", "dentist", "engineer", "sales"],
+        "class 2": ["catering", "electrician", "nurse", "retail", "kitchen", "carpenter"],
+        "class 3": ["driver", "labour", "mechanic", "porter", "police", "cleaner", "welder"],
+        "class 4": ["scaffolder", "armed", "diver", "quarry", "cement"]
+    }
+
+    def classify_occupation(title):
+        title = title.strip().lower()
+        for k, v in occupation_class_map.items():
+            for t in v:
+                if t in title:
+                    return k
+        return "class 1"
+
+    occupation_loadings = {
+        "class 1": 0.0,
+        "class 2": 0.10,
+        "class 3": 0.25,
+        "class 4": 0.40
+    }
+
+    def calculate_age(dob):
+        ref = datetime.date.today()
+        age = ref.year - dob.year
+        if (ref.month, ref.day) < (dob.month, dob.day):
+            age -= 1
+        months_diff = (dob.month - ref.month) + 12 * (dob.year - ref.year)
+        if abs(months_diff) >= 6:
+            age += 1
+        return min(age, 65)
+
+    def calculate_premium(row, sa, selected_benefits):
+        age = calculate_age(row["dob"])
+        gender = str(row.get("gender", "male")).lower()
+        occ_class = classify_occupation(str(row.get("job_title", "")))
+        loading = occupation_loadings.get(occ_class, 0.4)
+
+        premiums = {}
+        dac_rate = dac_rates.get(gender, dac_rates["male"]).get(age, 0)
+        ptd_rate = ptd_class1_rates.get(age, 0) * (1 + loading)
+
+        if "DAC" in selected_benefits:
+            premiums["DAC"] = round((dac_rate * sa) / 1000, 2)
+        if "PTD – Accident" in selected_benefits or "PTD – Sickness" in selected_benefits:
+            premiums["PTD"] = round((ptd_rate * sa) / 1000, 2)
+        return premiums
+
+    results = []
+    for i, row in df.iterrows():
+        sa = row["sa"]
+        if sa_basis == "Flat SA":
+            sa = flat_sa
         else:
-            st.info("➕ Add at least one claim record to compute credibility.")
-            claim_years = 0
-            total_claims_paid = 0
+            sa = row["salary"] * multiple
+        premiums = calculate_premium(row, sa, selected_benefits)
+        results.append({
+            "Member": i + 1,
+            "Age": calculate_age(row["dob"]),
+            "Occupation": classify_occupation(row["job_title"]),
+            "SA": sa,
+            **premiums
+        })
 
-    elif claim_option == "Clean Record (No Claims)":
-        claim_years = 3
-        total_claims_paid = 0
-        st.info("✅ Assuming 3 clean claim years for pricing.")
+    result_df = pd.DataFrame(results)
+    st.dataframe(result_df)
 
-    elif claim_option == "Virgin Scheme (First-Time Cover)":
-        claim_years = 0
-        total_claims_paid = 0
-        st.warning("🧪 Virgin scheme → No credibility (0%)")
-
-    # --- CREDIBILITY CALC ---
-    st.subheader("📊 Credibility Assessment")
-
-    def credibility_table(n_lives, years):
-        # Based on simplified table you shared
-        if n_lives <= 500:
-            if years == 1: return 0.02
-            if years == 2: return 0.03
-            if years == 3: return 0.05
-            if years == 4: return 0.07
-            if years >= 5: return 0.10
-        return 0.10  # default max
-
-    base_cred = credibility_table(len(df), claim_years)
-    data_bonus = 0
-    if gender_missing == 0:
-        data_bonus += 0.02
-    if occ_missing == 0:
-        data_bonus += 0.02
-
-    final_credibility = min(round((base_cred + data_bonus) * 100, 2), 100)
-
-    st.markdown(f"""
-    - 📌 **Members**: {len(df)}  
-    - 📌 **Claim Years**: {claim_years}  
-    - 📌 **Total Claims Paid**: ${total_claims_paid:,.2f}  
-    - 📌 **Base Credibility**: {base_cred*100:.1f}%  
-    - 🎁 **Data Bonus**: {data_bonus*100:.1f}%  
-    """)
-    st.success(f"✅ **Final Credibility Factor: {final_credibility}%**")
-
-else:
-    st.info("👈 Please upload a valid Excel census file (.xlsx) to begin.")
-# --- BENEFIT SELECTION ---
-st.subheader("🛡️ Select Scheme Benefits")
-
-st.markdown("**Death Any Cause (DAC)** is mandatory and always included.")
-selected_benefits = {"DAC": 100}
-
-# Optional benefits with percentage input
-optional_benefits = {
-    "Accidental Death (AccDeath)": 100,
-    "PTD – Accident": 200,
-    "PTD – Sickness": 200,
-    "PPD – Acc/Sick": 200,
-    "TTD – Acc/Sick": 100
-}
-
-st.markdown("### ☑️ Optional Benefits (% of DAC)")
-for benefit, max_pct in optional_benefits.items():
-    col1, col2 = st.columns([2, 1])
-    enable = col1.checkbox(f"{benefit} (up to {max_pct}%)")
-    if enable:
-        pct = col2.number_input(f"% of DAC for {benefit}", min_value=0.0, max_value=float(max_pct), value=0.0, step=5.0)
-        if pct > 0:
-            selected_benefits[benefit] = pct
-
-# MedEx & Repatriation (manual input)
-st.markdown("### 🏥 Medical / Repatriation Benefits")
-medex_enabled = st.checkbox("Include Medical Expenses due to Accident (Max $10,000)")
-if medex_enabled:
-    medex_limit = st.number_input("Medical Expense Limit (USD)", min_value=0, max_value=10000, value=10000, step=500)
-    selected_benefits["MedEx"] = medex_limit
-
-repat_enabled = st.checkbox("Include Repatriation Expenses (Max $5,000)")
-if repat_enabled:
-    repat_limit = st.number_input("Repatriation Limit (USD)", min_value=0, max_value=5000, value=5000, step=500)
-    selected_benefits["Repatriation"] = repat_limit
-
-# Show selected
-st.markdown("### 📋 Selected Benefits Summary")
-for k, v in selected_benefits.items():
-    st.write(f"🔹 {k}: {'$'+str(v) if k in ['MedEx', 'Repatriation'] else str(v)+'% of DAC'}")
-
-# --- MAXIMUM EXPOSURE CALCULATION ---
-if 'df' in locals() and not df.empty:
-    st.subheader("💥 Maximum Exposure per Benefit")
-
-    exposure_data = []
-    max_sa = df["sum_assured"].max()
-
-    for benefit, value in selected_benefits.items():
-        if benefit == "DAC":
-            exposure_data.append({
-                "Benefit": benefit,
-                "Basis": "100% of DAC",
-                "Max Exposure (USD)": round(max_sa, 2)
-            })
-        elif benefit in ["MedEx", "Repatriation"]:
-            exposure_data.append({
-                "Benefit": benefit,
-                "Basis": f"Flat Limit (${value:,})",
-                "Max Exposure (USD)": round(value, 2)
-            })
-        else:
-            exposure = round((value / 100) * max_sa, 2)
-            exposure_data.append({
-                "Benefit": benefit,
-                "Basis": f"{value}% of DAC",
-                "Max Exposure (USD)": exposure
-            })
-
-    exposure_df = pd.DataFrame(exposure_data)
-    st.dataframe(exposure_df, use_container_width=True)
-
-# --- RATE SUGGESTION MODULE ---
-st.subheader("📉 Suggested Rate per Mille")
-
-# 1. Industry Rating Map
-industry_risk_factors = {
-    "Banking": 1.0,
-    "Education": 1.1,
-    "Construction": 1.5,
-    "Oil & Gas": 1.7,
-    "Healthcare": 1.3,
-    "Agriculture": 1.4,
-    "Government": 1.0,
-    "Retail": 1.2,
-    "IT": 1.0,
-    "Other": 1.2
-}
-
-industry = st.selectbox("Industry of Group", list(industry_risk_factors.keys()))
-industry_factor = industry_risk_factors[industry]
-
-# 2. Base DAC Rate Logic (you'll replace this logic later with actual table)
-base_dac_rate = 1.8  # start at 1.8‰
-age_load = 0.0
-credibility_load = 0.0
-
-# Age adjustment
-if avg_age > 45:
-    age_load = 0.3
-elif avg_age > 40:
-    age_load = 0.2
-elif avg_age > 35:
-    age_load = 0.1
-
-# Credibility adjustment
-if final_credibility < 5:
-    credibility_load = 0.5
-elif final_credibility < 10:
-    credibility_load = 0.3
-elif final_credibility < 15:
-    credibility_load = 0.1
-
-# 3. Optional Benefit Loadings
-benefit_loads = {
-    "Accidental Death (AccDeath)": 0.2,
-    "PTD – Accident": 0.4,
-    "PTD – Sickness": 0.4,
-    "PPD – Acc/Sick": 0.3,
-    "TTD – Acc/Sick": 0.3,
-    "MedEx": 0.2,
-    "Repatriation": 0.1
-}
-
-optional_load = 0.0
-for benefit in selected_benefits:
-    if benefit != "DAC" and benefit in benefit_loads:
-        optional_load += benefit_loads[benefit]
-
-# Final Rate Calculation
-suggested_dac_rate = round((base_dac_rate + age_load + credibility_load) * industry_factor, 2)
-total_scheme_rate = round(suggested_dac_rate + optional_load, 2)
-
-# Display
-st.markdown(f"""
-- 📌 **Base DAC Rate**: {base_dac_rate}‰  
-- 📌 **Industry Factor**: {industry_factor} ({industry})  
-- 📌 **Age Load**: {age_load}‰ (Avg Age: {avg_age})  
-- 📌 **Credibility Load**: {credibility_load}‰ (Credibility: {final_credibility}%)  
-- ➕ **Optional Benefit Load**: {optional_load}‰  
-""")
-
-st.success(f"✅ **Suggested DAC Rate**: {suggested_dac_rate}‰")
-st.success(f"✅ **Estimated Total Scheme Rate**: {total_scheme_rate}‰")
-
-# You may later save this or compare it to actual reinsurer quotes.
-
+    st.write("### Total Premium Summary")
+    st.write(result_df[["DAC", "PTD"]].sum(numeric_only=True))
